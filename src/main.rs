@@ -1,19 +1,34 @@
-use bevy::{prelude::*, sprite::MaterialMesh2dBundle};
+use bevy::{
+    prelude::*,
+    sprite::MaterialMesh2dBundle,
+};
 
 const TIME_STEP: f32 = 1.0 / 60.0;
 const BACKGROUND_COLOR: Color = Color::rgb(0.9, 0.9, 0.9);
+
 const BALL_STARTING_POSITION: Vec3 = Vec3::new(0.0, -50.0, 1.0);
 const BALL_SIZE: Vec3 = Vec3::new(30.0, 30.0, 0.0);
-const BALL_COLOR: Color = Color::rgb(1.0, 0.5, 0.5);
+const BALL_COLOR: Color = Color::rgb(0.5, 0.5, 1.0);
 const BALL_SPEED: f32 = 16.0;
+
+const WALL_THICKNESS: f32 = 10.0;
+const WALL_COLOR: Color = Color::rgb(0.2, 0.2, 0.2);
+const LEFT_WALL: f32 = -450.; // x coordinates
+const RIGHT_WALL: f32 = 450.;
+const BOTTOM_WALL: f32 = -300.; // y coordinates
+const TOP_WALL: f32 = 300.;
 
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .insert_resource(ClearColor(BACKGROUND_COLOR))
         .add_startup_system(setup)
-        .add_system(velocity)
-        .add_system(move_ball)
+        .add_event::<CollisionEvent>()
+        .add_systems(
+            (velocity, move_ball)
+                .in_schedule(CoreSchedule::FixedUpdate),
+        )
+        .insert_resource(FixedTime::new_from_secs(TIME_STEP))
         .add_system(bevy::window::close_on_esc)
         .run();
 }
@@ -21,8 +36,78 @@ fn main() {
 #[derive(Component)]
 struct Ball;
 
+#[derive(Component)]
+struct Brick;
+
 #[derive(Component, Deref, DerefMut)]
 struct Velocity(Vec2);
+
+#[derive(Component)]
+struct Collider;
+
+#[derive(Default)]
+struct CollisionEvent;
+
+#[derive(Bundle)]
+struct WallBundle {
+    sprite_bundle: SpriteBundle,
+    collider: Collider,
+}
+
+enum WallLocation {
+    Left,
+    Right,
+    Bottom,
+    Top,
+}
+
+impl WallLocation {
+    fn position(&self) -> Vec2 {
+        match self {
+            WallLocation::Left => Vec2::new(LEFT_WALL, 0.),
+            WallLocation::Right => Vec2::new(RIGHT_WALL, 0.),
+            WallLocation::Bottom => Vec2::new(0., BOTTOM_WALL),
+            WallLocation::Top => Vec2::new(0., TOP_WALL),
+        }
+    }
+
+    fn size(&self) -> Vec2 {
+        let arena_height = TOP_WALL - BOTTOM_WALL;
+        let arena_width = RIGHT_WALL - LEFT_WALL;
+        // Make sure we haven't messed up our constants
+        assert!(arena_height > 0.0);
+        assert!(arena_width > 0.0);
+
+        match self {
+            WallLocation::Left | WallLocation::Right => {
+                Vec2::new(WALL_THICKNESS, arena_height + WALL_THICKNESS)
+            }
+            WallLocation::Bottom | WallLocation::Top => {
+                Vec2::new(arena_width + WALL_THICKNESS, WALL_THICKNESS)
+            }
+        }
+    }
+}
+
+impl WallBundle {
+    fn new(location: WallLocation) -> WallBundle {
+        WallBundle {
+            sprite_bundle: SpriteBundle {
+                transform: Transform {
+                    translation: location.position().extend(0.0),
+                    scale: location.size().extend(1.0),
+                    ..default()
+                },
+                sprite: Sprite {
+                    color: WALL_COLOR,
+                    ..default()
+                },
+                ..default()
+            },
+            collider: Collider,
+        }
+    }
+}
 
 fn setup(
     mut commands: Commands,
@@ -40,6 +125,11 @@ fn setup(
         },
         Ball,
     ));
+
+    commands.spawn(WallBundle::new(WallLocation::Left));
+    commands.spawn(WallBundle::new(WallLocation::Right));
+    commands.spawn(WallBundle::new(WallLocation::Bottom));
+    commands.spawn(WallBundle::new(WallLocation::Top));
 }
 
 fn velocity(mut query: Query<(&mut Transform, &Velocity)>) {
@@ -69,9 +159,14 @@ fn move_ball(keyboard_input: Res<Input<KeyCode>>, mut query: Query<&mut Transfor
         y -= 1.0;
     }
 
+    let left_bound = LEFT_WALL + WALL_THICKNESS / 2.0 + BALL_SIZE.x / 2.0;
+    let right_bound = RIGHT_WALL - WALL_THICKNESS / 2.0 - BALL_SIZE.x / 2.0;
+    let bottom_bound = BOTTOM_WALL + WALL_THICKNESS / 2.0 + BALL_SIZE.x / 2.0;
+    let top_bound = TOP_WALL - WALL_THICKNESS / 2.0 - BALL_SIZE.x / 2.0;
+
     ball_transform.translation = Vec3::new(
-        ball_transform.translation.x + x * BALL_SPEED,
-        ball_transform.translation.y + y * BALL_SPEED,
+        (ball_transform.translation.x + x * BALL_SPEED).clamp(left_bound, right_bound),
+        (ball_transform.translation.y + y * BALL_SPEED).clamp(bottom_bound, top_bound),
         1.0,
     );
 }
