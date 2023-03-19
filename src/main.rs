@@ -1,5 +1,6 @@
 use bevy::{
     prelude::*,
+    sprite::collide_aabb::{collide, Collision},
     sprite::MaterialMesh2dBundle,
 };
 
@@ -10,6 +11,10 @@ const BALL_STARTING_POSITION: Vec3 = Vec3::new(0.0, -50.0, 1.0);
 const BALL_SIZE: Vec3 = Vec3::new(30.0, 30.0, 0.0);
 const BALL_COLOR: Color = Color::rgb(0.5, 0.5, 1.0);
 const BALL_SPEED: f32 = 16.0;
+
+const BRICK_SIZE: Vec2 = Vec2::new(100., 30.);
+const BRICK_COLOR: Color = Color::rgb(0.5, 0.5, 1.0);
+const BRICK_SPEED: f32 = 512.0;
 
 const WALL_THICKNESS: f32 = 10.0;
 const WALL_COLOR: Color = Color::rgb(0.2, 0.2, 0.2);
@@ -25,7 +30,11 @@ fn main() {
         .add_startup_system(setup)
         .add_event::<CollisionEvent>()
         .add_systems(
-            (velocity, move_ball)
+            (
+                collision,
+                velocity.before(collision),
+                move_ball.before(collision).after(velocity),
+            )
                 .in_schedule(CoreSchedule::FixedUpdate),
         )
         .insert_resource(FixedTime::new_from_secs(TIME_STEP))
@@ -38,6 +47,11 @@ struct Ball;
 
 #[derive(Component)]
 struct Brick;
+
+#[derive(Component)]
+struct Health {
+    points: u16,
+}
 
 #[derive(Component, Deref, DerefMut)]
 struct Velocity(Vec2);
@@ -116,6 +130,11 @@ fn setup(
 ) {
     commands.spawn(Camera2dBundle::default());
 
+    commands.spawn(WallBundle::new(WallLocation::Left));
+    commands.spawn(WallBundle::new(WallLocation::Right));
+    commands.spawn(WallBundle::new(WallLocation::Bottom));
+    commands.spawn(WallBundle::new(WallLocation::Top));
+
     commands.spawn((
         MaterialMesh2dBundle {
             mesh: meshes.add(shape::Circle::default().into()).into(),
@@ -126,10 +145,24 @@ fn setup(
         Ball,
     ));
 
-    commands.spawn(WallBundle::new(WallLocation::Left));
-    commands.spawn(WallBundle::new(WallLocation::Right));
-    commands.spawn(WallBundle::new(WallLocation::Bottom));
-    commands.spawn(WallBundle::new(WallLocation::Top));
+    commands.spawn((
+        SpriteBundle {
+            sprite: Sprite {
+                color: BRICK_COLOR,
+                ..default()
+            },
+            transform: Transform {
+                translation: Vec2::new(100.0, 100.0).extend(0.0),
+                scale: Vec3::new(BRICK_SIZE.x, BRICK_SIZE.y, 1.0),
+                ..default()
+            },
+            ..default()
+        },
+        Brick,
+        Collider,
+        Velocity(Vec2::new(1.0, 1.0).normalize() * BRICK_SPEED),
+        //Health { points: 3 },
+    ));
 }
 
 fn velocity(mut query: Query<(&mut Transform, &Velocity)>) {
@@ -169,4 +202,44 @@ fn move_ball(keyboard_input: Res<Input<KeyCode>>, mut query: Query<&mut Transfor
         (ball_transform.translation.y + y * BALL_SPEED).clamp(bottom_bound, top_bound),
         1.0,
     );
+}
+
+fn collision(
+    mut brick_query: Query<(&mut Velocity, &Transform), With<Brick>>,
+    collider_query: Query<&Transform, With<Collider>>,
+    mut collision_events: EventWriter<CollisionEvent>,
+) {
+    let (mut brick_velocity, brick_transform) = brick_query.single_mut();
+    let brick_size = brick_transform.scale.truncate();
+
+    for transform in &collider_query {
+        let collision = collide(
+            brick_transform.translation,
+            brick_size,
+            transform.translation,
+            transform.scale.truncate(),
+        );
+        if let Some(collision) = collision {
+            //brick_health.points -= 1;
+            collision_events.send_default();
+
+            let mut reflect_x = false;
+            let mut reflect_y = false;
+
+            match collision {
+                Collision::Left => reflect_x = brick_velocity.x > 0.0,
+                Collision::Right => reflect_x = brick_velocity.x < 0.0,
+                Collision::Top => reflect_y = brick_velocity.y < 0.0,
+                Collision::Bottom => reflect_y = brick_velocity.y > 0.0,
+                Collision::Inside => { /* do nothing */ }
+            }
+
+            if reflect_x {
+                brick_velocity.x = -brick_velocity.x;
+            }
+            if reflect_y {
+                brick_velocity.y = -brick_velocity.y;
+            }
+        }
+    }
 }
